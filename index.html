@@ -68,6 +68,60 @@
         </div>
       </div>
 
+      <!-- New JSON Input Section (Collapsible) -->
+      <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+        <div class="flex justify-between items-center">
+          <h2 class="text-xl font-medium text-gray-800">
+            Importar de JSON de evento
+          </h2>
+          <button
+            id="toggleJsonSection"
+            class="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm transition-colors flex items-center"
+          >
+            <span id="toggleJsonText">Mostrar input JSON</span>
+            <svg
+              id="toggleJsonIcon"
+              class="w-4 h-4 ml-1 transform"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M19 9l-7 7-7-7"
+              ></path>
+            </svg>
+          </button>
+        </div>
+
+        <div id="jsonInputSection" class="space-y-4 hidden mt-4">
+          <!-- The JSON input content stays the same -->
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1"
+              >JSON Input</label
+            >
+            <textarea
+              id="jsonInput"
+              rows="6"
+              class="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+              placeholder="Cole seu evento JSON ou chamada de evento com JSON aqui..."
+            ></textarea>
+            <!-- Rest of the textarea section remains unchanged -->
+          </div>
+          <div class="flex justify-end">
+            <button
+              onclick="parseJsonInput()"
+              class="bg-indigo-500 text-white px-4 py-2 rounded-md hover:bg-indigo-600 transition-colors"
+            >
+              Parsear e preencher dados
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
         <div class="space-y-4">
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -436,6 +490,510 @@
           alert("Error generating URL: " + error.message);
         }
       }
+
+      /**
+       * Parses a JSON string in various formats, including doubly stringified JSON
+       * @param {string} text - The text to parse as JSON
+       * @returns {Object|null} - Parsed JSON object or null if parsing failed
+       */
+      function parseJsonString(text) {
+        if (!text || typeof text !== "string") return null;
+
+        try {
+          // First attempt: direct parse (simple case)
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed === "object") return parsed;
+        } catch (e) {}
+
+        // If direct parse fails, try handling various string formats
+        try {
+          // Handle doubly stringified JSON (with escaped quotes)
+          // This is the format in the example: "{\"cart\":{\"cart_id\":...}}"
+          if (
+            (text.startsWith('"') && text.endsWith('"')) ||
+            (text.startsWith("'") && text.endsWith("'"))
+          ) {
+            // Remove the outer quotes and parse the content
+            const content = text.substring(1, text.length - 1);
+
+            // Handle common escape patterns
+            const unescaped = content
+              .replace(/\\"/g, '"') // Replace \" with "
+              .replace(/\\\\/g, "\\") // Replace \\ with \
+              .replace(/\\n/g, "\n") // Replace \n with newline
+              .replace(/\\r/g, "\r") // Replace \r with carriage return
+              .replace(/\\t/g, "\t") // Replace \t with tab
+              .replace(/\\b/g, "\b") // Replace \b with backspace
+              .replace(/\\f/g, "\f"); // Replace \f with form feed
+
+            try {
+              return JSON.parse(unescaped);
+            } catch (innerErr) {
+              // If still fails, the content might not be valid JSON
+              console.warn("Could not parse unescaped content:", innerErr);
+            }
+          }
+        } catch (e2) {
+          console.warn("Error processing stringified JSON:", e2);
+        }
+
+        return null;
+      }
+
+      /**
+       * Finds and extracts JSON objects from a text string
+       * @param {string} text - Input text to search for JSON
+       * @returns {Object|null} - First valid parsed JSON object or null
+       */
+      function findJsonInText(text) {
+        if (!text || typeof text !== "string") return null;
+
+        // Try parsing the entire text first
+        const directParse = parseJsonString(text);
+        if (directParse) return directParse;
+
+        // Look for JSON objects within the text using brace matching
+        let openBracePos = -1;
+        let depth = 0;
+        let inString = false;
+        let escapeNext = false;
+
+        for (let i = 0; i < text.length; i++) {
+          // Handle escape sequences
+          if (escapeNext) {
+            escapeNext = false;
+            continue;
+          }
+
+          const char = text[i];
+
+          // Handle string literals
+          if (char === '"' && !escapeNext) {
+            inString = !inString;
+          } else if (char === "\\" && inString) {
+            escapeNext = true;
+          }
+
+          // Only count braces when not inside a string
+          if (!inString) {
+            if (char === "{") {
+              depth++;
+              if (depth === 1) openBracePos = i;
+            } else if (char === "}") {
+              depth--;
+
+              // When we've closed a top-level object, extract and try to parse it
+              if (depth === 0 && openBracePos !== -1) {
+                const jsonCandidate = text.substring(openBracePos, i + 1);
+                try {
+                  const parsed = JSON.parse(jsonCandidate);
+                  if (parsed && typeof parsed === "object") return parsed;
+                } catch (e) {
+                  // Not valid JSON, continue searching
+                }
+              }
+            }
+          }
+        }
+
+        return null;
+      }
+
+      /**
+       * Recursively finds product objects in a JSON structure
+       * @param {Object|Array} data - JSON object or array to search
+       * @param {Array} [foundProducts=[]] - Array to collect found products
+       * @returns {Array} - Array of product objects found
+       */
+      function findProducts(data, foundProducts = []) {
+        if (!data) return foundProducts;
+
+        // Function to check if an object is a valid product
+        const isProduct = (obj) => {
+          return (
+            obj &&
+            typeof obj === "object" &&
+            !Array.isArray(obj) &&
+            (obj.product_id !== undefined || obj.sku !== undefined)
+          );
+        };
+
+        // If data is an array, check each item
+        if (Array.isArray(data)) {
+          // Check if this array contains products directly
+          const potentialProducts = data.filter(isProduct);
+          if (potentialProducts.length > 0) {
+            foundProducts.push(...potentialProducts);
+          } else {
+            // Recursively search nested arrays
+            data.forEach((item) => findProducts(item, foundProducts));
+          }
+          return foundProducts;
+        }
+
+        // If data is an object, search for specific product arrays first
+        if (typeof data === "object") {
+          // Common paths where products are found
+          const productPaths = [
+            "items",
+            "products",
+            "cart.items",
+            "cart.products",
+            "line_items",
+          ];
+
+          // Check each common path
+          for (const path of productPaths) {
+            let target = data;
+            const segments = path.split(".");
+
+            // Navigate to the path
+            for (const segment of segments) {
+              if (
+                target &&
+                typeof target === "object" &&
+                target[segment] !== undefined
+              ) {
+                target = target[segment];
+              } else {
+                target = null;
+                break;
+              }
+            }
+
+            // If target is an array, check if it contains products
+            if (Array.isArray(target)) {
+              const potentialProducts = target.filter(isProduct);
+              if (potentialProducts.length > 0) {
+                foundProducts.push(...potentialProducts);
+                return foundProducts; // Return early if we found products
+              }
+            }
+          }
+
+          // If no products found in common paths, check all object properties
+          for (const key in data) {
+            if (data[key] && typeof data[key] === "object") {
+              findProducts(data[key], foundProducts);
+            }
+          }
+        }
+
+        return foundProducts;
+      }
+
+      /**
+       * Creates recovery property elements for a product
+       * @param {HTMLElement} productElement - DOM element of the product
+       * @param {Object} recovery - Recovery properties object
+       */
+      function createRecoveryProperties(productElement, recovery) {
+        const container = productElement.querySelector(
+          ".recovery-properties .space-y-2"
+        );
+
+        // Clear existing properties first
+        container.innerHTML = "";
+
+        // Add recovery properties if they exist
+        if (recovery && typeof recovery === "object") {
+          Object.entries(recovery).forEach(([key, value]) => {
+            const property = document.createElement("div");
+            property.className = "recovery-property flex gap-2";
+            property.innerHTML = `
+              <input type="text" placeholder="Key" value="${escapeHtml(key)}" 
+                    class="w-1/3 px-2 py-1 border rounded-md">
+              <input type="text" placeholder="Value" value="${escapeHtml(
+                value
+              )}" 
+                    class="w-2/3 px-2 py-1 border rounded-md">
+              <button onclick="this.parentElement.remove()" 
+                      class="text-red-500 hover:text-red-700 text-sm">×</button>
+            `;
+            container.appendChild(property);
+          });
+        }
+
+        // If no properties were added, add a default empty one
+        if (container.children.length === 0) {
+          const property = document.createElement("div");
+          property.className = "recovery-property flex gap-2";
+          property.innerHTML = `
+            <input type="text" placeholder="Key" class="w-1/3 px-2 py-1 border rounded-md">
+            <input type="text" placeholder="Value" class="w-2/3 px-2 py-1 border rounded-md">
+            <button onclick="this.parentElement.remove()" 
+                    class="text-red-500 hover:text-red-700 text-sm">×</button>
+          `;
+          container.appendChild(property);
+        }
+      }
+
+      /**
+       * Safely escape HTML special characters to prevent XSS
+       * @param {string} unsafe - String that may contain unsafe HTML characters
+       * @returns {string} - Escaped safe string
+       */
+      function escapeHtml(unsafe) {
+        if (unsafe === undefined || unsafe === null) return "";
+        return String(unsafe)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      /**
+       * Extract cart ID from various structures in the JSON
+       * @param {Object} json - Parsed JSON object
+       * @returns {string} - Extracted cart ID or empty string
+       */
+      function extractCartId(json) {
+        if (!json) return "";
+
+        // Direct cart_id property
+        if (json.cart_id) return json.cart_id;
+
+        // Check cart object
+        if (json.cart && json.cart.cart_id) return json.cart.cart_id;
+
+        // Check id property that might be a cart ID
+        if (json.id && typeof json.id === "string" && json.id.length > 8)
+          return json.id;
+
+        // Check other common cart ID locations
+        const cartIdPaths = [
+          "data.cart_id",
+          "data.cart.cart_id",
+          "cart.id",
+          "order.cart_id",
+          "checkout.cart_id",
+        ];
+
+        for (const path of cartIdPaths) {
+          let target = json;
+          const segments = path.split(".");
+
+          for (const segment of segments) {
+            if (
+              target &&
+              typeof target === "object" &&
+              target[segment] !== undefined
+            ) {
+              target = target[segment];
+            } else {
+              target = null;
+              break;
+            }
+          }
+
+          if (target && typeof target === "string") return target;
+        }
+
+        return "";
+      }
+
+      /**
+       * Extract user ID from various structures in the JSON
+       * @param {Object} json - Parsed JSON object
+       * @returns {string} - Extracted user ID or empty string
+       */
+      function extractUserId(json) {
+        if (!json) return "";
+
+        // Direct user_id property
+        if (json.user_id) return json.user_id;
+
+        // Email as fallback
+        if (json.email) return json.email;
+
+        // Check user object
+        if (json.user) {
+          if (json.user.user_id) return json.user.user_id;
+          if (json.user.email) return json.user.email;
+        }
+
+        // Check common ID paths
+        const userIdPaths = [
+          "data.user_id",
+          "data.email",
+          "cart.user_id",
+          "cart.customer.email",
+          "checkout.user_id",
+          "checkout.email",
+          "order.user_id",
+          "order.email",
+        ];
+
+        for (const path of userIdPaths) {
+          let target = json;
+          const segments = path.split(".");
+
+          for (const segment of segments) {
+            if (
+              target &&
+              typeof target === "object" &&
+              target[segment] !== undefined
+            ) {
+              target = target[segment];
+            } else {
+              target = null;
+              break;
+            }
+          }
+
+          if (target && typeof target === "string") return target;
+        }
+
+        return "";
+      }
+
+      /**
+       * Normalize product data to a standard format
+       * @param {Object} product - Product object from JSON
+       * @returns {Object} - Normalized product object
+       */
+      function normalizeProduct(product) {
+        if (!product || typeof product !== "object") return null;
+
+        // Extract product ID, prioritizing different formats
+        const productId = String(product.product_id || "");
+
+        // Extract SKU, prioritizing different formats
+        const sku = String(product.sku || "");
+
+        // Extract quantity, defaulting to 1
+        const quantity = String(
+          product.quantity || product.qty || product.amount || "1"
+        );
+
+        // Extract recovery properties if available
+        const recovery = product.recovery_properties || {};
+
+        return {
+          productId,
+          sku,
+          quantity,
+          recovery,
+        };
+      }
+
+      /**
+       * Parses JSON input and populates the form
+       */
+      function parseJsonInput() {
+        const jsonInput = document.getElementById("jsonInput").value.trim();
+
+        if (!jsonInput) {
+          alert("Please enter some JSON data to parse");
+          return;
+        }
+
+        try {
+          // Extract JSON from the input text using our improved parser
+          const json = parseJsonString(jsonInput) || findJsonInText(jsonInput);
+
+          if (!json) {
+            alert("Could not extract valid JSON from the input");
+            return;
+          }
+
+          console.log("Extracted JSON:", json);
+
+          // Extract user ID
+          const userId = extractUserId(json);
+          if (userId) {
+            document.getElementById("userId").value = userId;
+          }
+
+          // Extract cart ID
+          const cartId = extractCartId(json);
+          if (cartId) {
+            document.getElementById("cartId").value = cartId;
+          }
+
+          // Find and process products
+          const productData = findProducts(json);
+
+          if (productData && productData.length > 0) {
+            // Clear existing products
+            const productsContainer =
+              document.getElementById("products-container");
+            productsContainer.innerHTML = "";
+
+            // Add normalized products
+            productData.forEach((rawProduct) => {
+              const product = normalizeProduct(rawProduct);
+              if (!product) return;
+
+              // Add a new product element
+              addProduct();
+
+              // Get the newly added product element (last child)
+              const productElement = productsContainer.lastElementChild;
+
+              // Fill in the product details
+              productElement.querySelector(".quantity").value =
+                product.quantity;
+              productElement.querySelector(".productId").value =
+                product.productId;
+              productElement.querySelector(".sku").value = product.sku;
+
+              // Add recovery properties
+              createRecoveryProperties(productElement, product.recovery);
+            });
+
+            console.log(`Populated form with ${productData.length} products`);
+          } else {
+            console.log("No products found in the JSON");
+          }
+
+          // Show success message
+          const resultDiv = document.getElementById("result");
+          resultDiv.classList.remove("hidden");
+          resultDiv.innerHTML = `
+            <p class="text-sm font-medium text-green-700 mb-1">Form populated successfully!</p>
+            <p class="text-xs text-gray-600">
+              Found user ID: ${userId || "None"}, 
+              cart ID: ${cartId || "None"}, 
+              products: ${productData.length || 0}
+            </p>
+          `;
+
+          // Hide success message after 5 seconds
+          setTimeout(() => {
+            resultDiv.classList.add("hidden");
+          }, 5000);
+        } catch (error) {
+          console.error("Error parsing JSON input:", error);
+          alert(`Error parsing JSON input: ${error.message}`);
+        }
+      }
+
+      // Toggle JSON input section visibility
+      document
+        .getElementById("toggleJsonSection")
+        .addEventListener("click", function () {
+          const jsonInputSection = document.getElementById("jsonInputSection");
+          const isHidden = jsonInputSection.classList.contains("hidden");
+
+          // Toggle visibility
+          if (isHidden) {
+            jsonInputSection.classList.remove("hidden");
+            document.getElementById("toggleJsonText").textContent =
+              "Esconder input JSON";
+            document
+              .getElementById("toggleJsonIcon")
+              .classList.add("rotate-180");
+          } else {
+            jsonInputSection.classList.add("hidden");
+            document.getElementById("toggleJsonText").textContent =
+              "Mostrar input JSON";
+            document
+              .getElementById("toggleJsonIcon")
+              .classList.remove("rotate-180");
+          }
+        });
     </script>
   </body>
 </html>
